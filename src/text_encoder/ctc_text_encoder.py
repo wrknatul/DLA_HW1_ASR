@@ -1,7 +1,12 @@
 import re
 from string import ascii_lowercase
 
+from pyctcdecode import Alphabet, BeamSearchDecoderCTC
+from typing import List
 import torch
+import math
+import numpy as np
+from collections import defaultdict
 
 # TODO add CTC decode
 # TODO add BPE, LM, Beam Search support
@@ -9,6 +14,16 @@ import torch
 # The design can be remarkably improved
 # to calculate stuff more efficiently and prettier
 
+def _log_softmax(x, axis):
+    x_max = np.amax(x, axis=axis, keepdims=True)
+    if x_max.ndim > 0:
+        x_max[~np.isfinite(x_max)] = 0
+    elif not np.isfinite(x_max):
+        x_max = 0
+    tmp = x - x_max
+    with np.errstate(divide="ignore"):
+        out = tmp - np.log(np.sum(np.exp(tmp), axis=axis, keepdims=True))
+        return out
 
 class CTCTextEncoder:
     EMPTY_TOK = ""
@@ -28,6 +43,8 @@ class CTCTextEncoder:
 
         self.ind2char = dict(enumerate(self.vocab))
         self.char2ind = {v: k for k, v in self.ind2char.items()}
+        self.decoder = BeamSearchDecoderCTC(Alphabet(self.vocab, False), None)
+        self.default_beam_size = 100
 
     def __len__(self):
         return len(self.vocab)
@@ -59,7 +76,22 @@ class CTCTextEncoder:
         return "".join([self.ind2char[int(ind)] for ind in inds]).strip()
 
     def ctc_decode(self, inds) -> str:
-        pass  # TODO
+        result_string = ''
+        prev = self.EMPTY_TOK
+        for ind in inds:
+            char = self.ind2char[ind]
+            if char == self.EMPTY_TOK:
+                prev = char
+                continue
+
+            if (prev == self.EMPTY_TOK or char != result_string[-1]):
+                result_string += char
+                prev = char
+
+        return result_string
+
+    def ctc_beam_search(self, inds: torch.Tensor) -> str:
+        return self.decoder.decode(inds.numpy(), beam_width=self.default_beam_size)
 
     @staticmethod
     def normalize_text(text: str):
