@@ -13,6 +13,7 @@ hydra-core
 datasets
 pyctcdecode
 editdistance
+wget
 
 black
 isort
