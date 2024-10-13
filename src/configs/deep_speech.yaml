@@ -2,8 +2,8 @@ defaults:
   - model: deep_speech
   - writer: wandb
   - metrics: beam_search
-  - datasets: onebatchtest
-  - dataloader: one_batch_test
+  - datasets: librispeechdataset
+  - dataloader: deep_speech
   - transforms: example_only_instance
   - _self_
 optimizer:

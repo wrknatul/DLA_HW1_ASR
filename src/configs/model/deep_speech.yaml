@@ -1,2 +1,2 @@
-_target_: src.model.DeepSpeechModel
-input_channels: 128
+_target_: src.model.DeepSpeech2
+n_feats: 128

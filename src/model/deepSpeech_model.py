@@ -1,113 +1,130 @@
-import logging
-
 import torch
+import torch.nn.functional as F
 from torch import nn
-from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
-import numpy as np
-
 from src.model.baseline_model import BaselineModel
 
 
-class RNNLayer(nn.Module):
-    def __init__(
-        self,
-        input_size: int,
-        rnn_hidden_size: int,
-        bidirectional: bool = False,
-        **batch
-    ):
-        super(RNNLayer, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = rnn_hidden_size
-        self.bidirectional = bidirectional
+class BlockRNN(nn.Module):
+    def __init__(self, input_size: int, hidden_size: int, rnn_type : nn.GRU, dropout = 0.1, bidirectional_ = True, batch_first_ = True, bias_ = True):
+        super().__init__()
+        self.bn = nn.BatchNorm1d(input_size)
+        self.rnn = rnn_type(input_size=input_size, hidden_size=hidden_size, bias=bias_, dropout=dropout, bidirectional=bidirectional_, batch_first=batch_first_)
 
-        self.num_directions = 2 if bidirectional else 1
-        self.rnn = nn.LSTM(
-            input_size,
-            rnn_hidden_size,
-            bidirectional=bidirectional,
-            batch_first=True,
-        )
-        if bidirectional:
-            self.down_projection = nn.Linear(rnn_hidden_size * 2, rnn_hidden_size)
-
-    def forward(self, x, lengths):
-        batch_layer = nn.BatchNorm1d(num_features=self.input_size)
-        relu_layer = nn.ReLU()
-        outputs = relu_layer(batch_layer(x.transpose(1, 2)).transpose(1, 2))
-        outputs = pack_padded_sequence(outputs, lengths, batch_first=True, enforce_sorted=False)
-        outputs, _ = self.rnn(outputs)
-        outputs, _ = pad_packed_sequence(outputs, batch_first=True)
+    def forward(self, inputs: torch.Tensor, input_lengths: torch.Tensor) -> torch.Tensor:
+        inputs = F.relu(self.bn(inputs.transpose(1, 2))).transpose(1, 2)
+        outputs, _ = self.rnn(nn.utils.rnn.pack_padded_sequence(inputs, input_lengths.cpu(), batch_first=True, enforce_sorted=False))
+        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs)
         return outputs
 
 
-class DeepSpeechModel(BaselineModel):
-    # def __init__(self, input_channels, n_tokens, **batch):
-    def __init__(self, input_channels, n_tokens, **batch):
+class maskCNN(nn.Module):
+    def __init__(self, sequential_: nn.Sequential):
+        super().__init__()
+        self.sequential = sequential_
 
-        rnn_params = {"num_rnn": 5, "rnn_hidden_size": 128, "bidirectional": True}
-        conv_params = [
-            {
-                "in_channels": 1,
-                "out_channels": 32,
-                "kernel_size": [41, 11],
-                "stride": [2, 2]
-            },
-            {
-                "in_channels": 32,
-                "out_channels": 32,
-                "kernel_size": [21, 11],
-                "stride": [2, 1]
-            }
-        ]
-        super().__init__(input_channels, n_tokens, **batch)
+    def forward(self, inputs: torch.Tensor, seq_lengths: torch.Tensor):
+        
+        output = None
+        for module in self.sequential:
+            output = module(inputs)
+            mask = torch.BoolTensor(output.size()).fill_(0)
+            if output.is_cuda:
+                mask = mask.cuda()
 
-        self.input_channels = input_channels
-        self.n_tokens = n_tokens
-        self.conv_params = conv_params
+            seq_lengths = self._get_sequence_lengths(module, seq_lengths, dim=1)
+            for idx, length in enumerate(seq_lengths):
+                length = length.item()
+                if (mask[idx].size(2) - length) > 0:
+                    mask[idx].narrow(dim=2, start=length, length=mask[idx].size(2) - length).fill_(1)
 
-        convs = []
-        rnn_feat = input_channels
-        for layer_ in self.conv_params:
-            (out_channels, kernel_size) = layer_["out_channels"],  layer_["kernel_size"] 
-            in_channels = layer_["in_channels"]
-            stride = layer_['stride']
-            rnn_feat = rnn_feat // stride[0]
-            convs.append(
-                nn.Sequential(
-                    nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,
-                        padding=tuple(np.array(kernel_size) // 2),
-                        stride=tuple(stride),
-                          bias=False),
-                    nn.BatchNorm2d(num_features=out_channels),
-                    nn.Hardtanh(0, 20)
-                )
+            output = output.masked_fill(mask, 0)
+            inputs = output
+
+        return output, seq_lengths
+    def get_output_size(self, input_size: int):
+        size = torch.Tensor([input_size]).int()
+        for module in self.sequential:
+            size = self._get_sequence_lengths(module, size, dim=0)
+        return size.item()
+
+    def transform_input_lengths(self, input_size: torch.Tensor):
+        for module in self.sequential:
+            input_size = self._get_sequence_lengths(module, input_size, dim=1)
+        return input_size
+
+    def _get_sequence_lengths(self, module: nn.Module, seq_lengths: torch.Tensor, dim = 1) -> torch.Tensor:
+        if isinstance(module, nn.Conv2d):
+            numerator = seq_lengths + 2 * module.padding[dim] - module.dilation[dim] * (module.kernel_size[dim] - 1) - 1
+            seq_lengths = numerator.float() / float(module.stride[dim])
+            seq_lengths = seq_lengths.int() + 1
+
+        elif isinstance(module, nn.MaxPool2d):
+            seq_lengths >>= 1
+
+        return seq_lengths.int()
+
+
+class ConvolutionsModule(nn.Module):
+    def __init__(self, n_feats: int, in_channels: int, out_channels: int, activation = nn.ReLU) -> None:
+        super().__init__()
+        self.activation = activation()
+        self.mask_conv = maskCNN(
+            nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=(41, 11), stride=(2, 2), padding=(20, 5), bias=False),
+                nn.BatchNorm2d(out_channels),
+                self.activation,
+                nn.Conv2d(out_channels, out_channels, kernel_size=(21, 11), stride=(2, 1), padding=(10, 5), bias=False),
+                nn.BatchNorm2d(out_channels),
+                self.activation,
             )
-        self.conv = nn.Sequential(*convs)
-        self.downsample = nn.Conv2d(self.conv_params[-1]['out_channels'], 1, kernel_size=1)
-        self.normalize = nn.Sequential(
-            nn.BatchNorm1d(num_features=rnn_feat),
-            nn.Hardtanh(min_val=0.0, max_val=20.0)
         )
+        self.output_size = self.mask_conv.get_output_size(n_feats)
 
-        rnn_hidden_size = (1 + rnn_params['bidirectional']) * rnn_params['rnn_hidden_size']
-        self.rnn = nn.ModuleList([RNNLayer(input_size=rnn_feat, **rnn_params)] +
-                                 [RNNLayer(input_size=rnn_hidden_size, **rnn_params) for _ in range(rnn_params['num_rnn'] - 1)])
+    def forward(self, spectrogram: torch.Tensor, spectrogram_length: torch.Tensor):
+        outputs, output_lengths = self.mask_conv(spectrogram.unsqueeze(1), spectrogram_length)
+        batch_size, channels, features, time = outputs.size()
+        outputs = outputs.permute(0, 3, 1, 2)
+        outputs = outputs.view(batch_size, time, channels * features)
+        return outputs, output_lengths
 
-        self.fc = nn.Linear(in_features=rnn_hidden_size, out_features=n_tokens)
 
-    def forward(self, spectrogram, spectrogram_length,  **batch):
-        outputs = spectrogram
+class DeepSpeech2(BaselineModel):
+    def __init__(
+            self,
+            n_feats: int,
+            n_tokens: int,
+            rnn_type=nn.GRU,
+            n_rnn_layers: int = 5,
+            conv_out_channels: int = 32,
+            rnn_hidden_size: int = 512,
+            dropout_p: float = 0.1,
+            activation = nn.ReLU
+    ):
+        super().__init__(n_feats=n_feats, n_tokens=n_tokens)
+        self.conv = ConvolutionsModule(n_feats=n_feats, in_channels=1, out_channels=conv_out_channels, activation=activation)
 
-        outputs = self.conv(outputs.unsqueeze(1))
-        outputs = self.downsample(outputs).squeeze(1)
-        outputs = self.normalize(outputs)
-        outputs = outputs.transpose(1, 2)
+        rnn_output_size = rnn_hidden_size * 2
+        self.rnn_layers = nn.ModuleList([
+            BlockRNN(
+                input_size=self.conv.mask_conv.get_output_size(n_feats) * conv_out_channels if idx == 0 else rnn_output_size,
+                hidden_size=rnn_hidden_size,
+                rnn_type=rnn_type,
+                dropout=dropout_p
+            ) for idx in range(n_rnn_layers)
+        ])
+        self.batch_norm = nn.BatchNorm1d(rnn_output_size)
+        self.fc = nn.Linear(rnn_output_size, n_tokens, bias=False)
 
-        for conv_layer in self.conv_params:
-            spectrogram_length = (spectrogram_length.subtract(1).float() / conv_layer['stride'][1]).add(1).int()
+    def forward(self, spectrogram: torch.Tensor, spectrogram_length: torch.Tensor, **batch):
+        outputs, output_lengths = self.conv(spectrogram, spectrogram_length)
+        outputs = outputs.permute(1, 0, 2).contiguous()
+        for rnn_layer in self.rnn_layers:
+            outputs = rnn_layer(outputs.transpose(0, 1), output_lengths)
 
-        for rnn_layer in self.rnn:
-            outputs = rnn_layer(outputs, spectrogram_length)
-        outputs = self.fc(outputs)
-        return {"log_probs": outputs, "log_probs_length": spectrogram_length}
+        outputs = self.batch_norm(outputs.permute(1, 2, 0))
+
+        outputs = self.fc(outputs.transpose(1, 2))
+        return {"log_probs": outputs, "log_probs_length": output_lengths}
+
+    def transform_input_lengths(self, input_lengths):
+        return self.conv.mask_conv.transform_input_lengths(input_lengths)
