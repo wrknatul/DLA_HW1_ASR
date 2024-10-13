@@ -45,7 +45,7 @@ class DeepSpeechModel(BaselineModel):
     # def __init__(self, input_channels, n_tokens, **batch):
     def __init__(self, input_channels, n_tokens, **batch):
 
-        rnn_params = {"num_rnn": 5, "rnn_hidden_size": 512, "bidirectional": True}
+        rnn_params = {"num_rnn": 5, "rnn_hidden_size": 128, "bidirectional": True}
         conv_params = [
             {
                 "in_channels": 1,
