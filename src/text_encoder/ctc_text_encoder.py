@@ -110,7 +110,7 @@ class CTCTextEncoder:
         return dp
 
     def ctc_beam_search(self, inds: torch.Tensor) -> str:
-        return self.decoder.decode(inds.numpy(), beam_width=self.default_beam_size)
+        return self.decoder.decode(inds.cpu().numpy(), beam_width=self.default_beam_size)
 
     @staticmethod
     def normalize_text(text: str):
