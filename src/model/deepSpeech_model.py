@@ -32,9 +32,9 @@ class RNNLayer(nn.Module):
             self.down_projection = nn.Linear(rnn_hidden_size * 2, rnn_hidden_size)
 
     def forward(self, x, lengths):
-        batch_size = x.size(0)
-        batch_layer = nn.BatchNorm1d(num_features=batch_size)
-        outputs = nn.ReLU(batch_layer(x.transpose(1, 2)).transpose(1, 2))
+        batch_layer = nn.BatchNorm1d(num_features=self.input_size)
+        relu_layer = nn.ReLU()
+        outputs = relu_layer(batch_layer(x.transpose(1, 2)).transpose(1, 2))
         outputs = pack_padded_sequence(outputs, lengths, batch_first=True, enforce_sorted=False)
         outputs, _ = self.rnn(outputs)
         outputs, _ = pad_packed_sequence(outputs, batch_first=True)
@@ -84,18 +84,24 @@ class DeepSpeechModel(BaselineModel):
                 )
             )
         self.conv = nn.Sequential(*convs)
+        self.downsample = nn.Conv2d(self.conv_params[-1]['out_channels'], 1, kernel_size=1)
+        self.normalize = nn.Sequential(
+            nn.BatchNorm1d(num_features=rnn_feat),
+            nn.Hardtanh(min_val=0.0, max_val=20.0)
+        )
 
         rnn_hidden_size = (1 + rnn_params['bidirectional']) * rnn_params['rnn_hidden_size']
         self.rnn = nn.ModuleList([RNNLayer(input_size=rnn_feat, **rnn_params)] +
                                  [RNNLayer(input_size=rnn_hidden_size, **rnn_params) for _ in range(rnn_params['num_rnn'] - 1)])
 
-        self.fc = nn.Linear(in_features=rnn_feat, out_features=n_tokens)
+        self.fc = nn.Linear(in_features=rnn_hidden_size, out_features=n_tokens)
 
-    def forward(self, x, spectrogram_length,  **batch):
-        outputs = x
+    def forward(self, spectrogram, spectrogram_length,  **batch):
+        outputs = spectrogram
 
         outputs = self.conv(outputs.unsqueeze(1))
-        outputs = outputs.reshape(outputs.shape[0], outputs.shape[1] * outputs.shape[2], outputs.shape[3])
+        outputs = self.downsample(outputs).squeeze(1)
+        outputs = self.normalize(outputs)
         outputs = outputs.transpose(1, 2)
 
         for conv_layer in self.conv_params:
@@ -103,5 +109,5 @@ class DeepSpeechModel(BaselineModel):
 
         for rnn_layer in self.rnn:
             outputs = rnn_layer(outputs, spectrogram_length)
-
-        return {"logits": self.fc(outputs)}
+        outputs = self.fc(outputs)
+        return {"log_probs": outputs, "log_probs_length": spectrogram_length}
