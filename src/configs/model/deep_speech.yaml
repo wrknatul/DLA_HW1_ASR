@@ -1,5 +1,5 @@
 _target_:  src.model.DeepSpeechModel
-n_feats: 128
+input_channels: 128
 conv_params: [
   {
     "in_channels": 1,
