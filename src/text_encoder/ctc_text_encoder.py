@@ -2,7 +2,7 @@ import re
 from string import ascii_lowercase
 
 from pyctcdecode import Alphabet, BeamSearchDecoderCTC
-from typing import List
+from typing import List, NamedTuple
 import torch
 import math
 import numpy as np
@@ -14,21 +14,14 @@ from collections import defaultdict
 # The design can be remarkably improved
 # to calculate stuff more efficiently and prettier
 
-def _log_softmax(x, axis):
-    x_max = np.amax(x, axis=axis, keepdims=True)
-    if x_max.ndim > 0:
-        x_max[~np.isfinite(x_max)] = 0
-    elif not np.isfinite(x_max):
-        x_max = 0
-    tmp = x - x_max
-    with np.errstate(divide="ignore"):
-        out = tmp - np.log(np.sum(np.exp(tmp), axis=axis, keepdims=True))
-        return out
+class Hypo(NamedTuple):
+    text: str
+    prob: float
 
 class CTCTextEncoder:
     EMPTY_TOK = ""
 
-    def __init__(self, alphabet=None, **kwargs):
+    def __init__(self, _default_beam_size=100, alphabet=None, **kwargs):
         """
         Args:
             alphabet (list): alphabet for language. If None, it will be
@@ -44,7 +37,7 @@ class CTCTextEncoder:
         self.ind2char = dict(enumerate(self.vocab))
         self.char2ind = {v: k for k, v in self.ind2char.items()}
         self.decoder = BeamSearchDecoderCTC(Alphabet(self.vocab, False), None)
-        self.default_beam_size = 100
+        self.default_beam_size = _default_beam_size
 
     def __len__(self):
         return len(self.vocab)
@@ -89,6 +82,32 @@ class CTCTextEncoder:
                 prev = char
 
         return result_string
+
+    def make_one_step(self, dp, next_token_probs):
+        new_dp = defaultdict(float)
+        for ind, next_token_prob in enumerate(next_token_probs):
+            cur_char = self.ind2char[ind]
+            for (prefix, last_char), v in dp.items():
+                if last_char == cur_char or cur_char == self.EMPTY_TOK:
+                    new_prefix = prefix
+                elif cur_char != self.EMPTY_TOK:
+                    new_prefix = prefix + cur_char
+                new_dp[(new_prefix, cur_char)] += v * next_token_prob
+        return new_dp
+
+    def ctc_beam_search_for_test(self, inds: torch.Tensor) -> str:
+        dp = {
+            ("", self.EMPTY_TOK): 1.0,
+        }
+        for prob in inds:
+            dp = self.make_one_step(dp, prob)
+            dp = dict(sorted(list(dp.items(), key=lambda x: -x[1]))[:self.default_beam_size])
+
+        dp = [
+            Hypo(prefix, proba)
+            for (prefix, _), proba in sorted(dp.items(), key=lambda x: -x[1])
+        ]
+        return dp
 
     def ctc_beam_search(self, inds: torch.Tensor) -> str:
         return self.decoder.decode(inds.numpy(), beam_width=self.default_beam_size)
