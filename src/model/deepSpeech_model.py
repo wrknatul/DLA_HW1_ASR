@@ -41,7 +41,22 @@ class RNNLayer(nn.Module):
 
 
 class DeepSpeechModel(BaselineModel):
-    def __init__(self, input_channels, rnn_params, conv_params, n_tokens, **batch):
+    def __init__(self, input_channels, n_tokens,
+        rnn_params = {"num_rnn": 5,  "rnn_hid": 512, "bi": True},
+        conv_params = [
+  {
+    "in_channels": 1,
+    "out_channels": 32,
+    "kernel_size": [41, 11],
+    "stride": [2, 2]
+  },
+  {
+    "in_channels": 32,
+    "out_channels": 32,
+    "kernel_size": [21, 11],
+    "stride": [2, 1]
+  }
+], **batch):
         super().__init__(input_channels, n_tokens, **batch)
         self.input_channels = input_channels
         self.n_tokens = n_tokens
