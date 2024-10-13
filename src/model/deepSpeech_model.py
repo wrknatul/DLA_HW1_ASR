@@ -94,9 +94,9 @@ class DeepSpeech2(BaselineModel):
             n_feats: int,
             n_tokens: int,
             rnn_type=nn.GRU,
-            n_rnn_layers: int = 5,
-            conv_out_channels: int = 32,
-            rnn_hidden_size: int = 512,
+            n_rnn_layers: int = 2,
+            conv_out_channels: int = 16,
+            rnn_hidden_size: int = 128,
             dropout_p: float = 0.1,
             activation = nn.ReLU
     ):
