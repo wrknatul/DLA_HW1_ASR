@@ -13,4 +13,4 @@ inferencer:
   device: auto # device name or "auto"
   save_path: "example" # any name here, can be a dataset name
   seed: 1
-  from_pretrained: "/kaggle/working/model_best.pth" # path to the pretrained model
+  from_pretrained: "/kaggle/input/data-path/model_best.pth" # path to the pretrained model
