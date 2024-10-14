@@ -249,7 +249,6 @@ class Inferencer(BaseTrainer):
                 "cer_beam_search": cer_beam_search,
             }
         df = pd.DataFrame.from_dict(rows, orient="index")
-        df.to_excel('data.xlsx', index=False)
     def show_statistics(self):
         print("wer_argmax_total is:", self.wer_argmax_total/self.counter_writings)
         print("cer_argmax_total is:", self.cer_argmax_total/self.counter_writings)
