@@ -88,6 +88,12 @@ class Inferencer(BaseTrainer):
         if not skip_model_load:
             # init model
             self._from_pretrained(config.inferencer.get("from_pretrained"))
+        
+        self.wer_argmax_total = 0.
+        self.cer_argmax_total = 0.
+        self.wer_beam_total = 0.
+        self.cer_beam_total = 0.
+        self.counter_writings = 0
 
     def run_inference(self):
         """
@@ -218,7 +224,7 @@ class Inferencer(BaseTrainer):
         tuples = list(zip(argmax_texts, predictions, text, argmax_texts_raw, audio_path))
 
         rows = {}
-        for argmax_pred, beam_search_pred, target, raw_pred, audio_path in tuples[:examples_to_log]:
+        for argmax_pred, beam_search_pred, target, raw_pred, audio_path in tuples:
             target = self.text_encoder.normalize_text(target)
             wer_argmax = calc_wer(target, argmax_pred) * 100
             cer_argmax = calc_cer(target, argmax_pred) * 100
@@ -226,6 +232,12 @@ class Inferencer(BaseTrainer):
             wer_beam_search = calc_wer(target, beam_search_pred) * 100
             cer_beam_search = calc_cer(target, beam_search_pred) * 100
 
+            self.wer_argmax_total += wer_argmax
+            self.cer_argmax_total += cer_argmax
+            self.wer_beam_total += wer_beam_search
+            self.cer_beam_total += cer_beam_search
+            self.counter_writings += 1
+ 
             rows[Path(audio_path).name] = {
                 "target": target,
                 "raw prediction": raw_pred,
@@ -238,3 +250,8 @@ class Inferencer(BaseTrainer):
             }
         df = pd.DataFrame.from_dict(rows, orient="index")
         df.to_excel('data.xlsx', index=False)
+    def show_statistics(self):
+        print("wer_argmax_total is:", self.wer_argmax_total/self.counter_writings)
+        print("cer_argmax_total is:", self.cer_argmax_total/self.counter_writings)
+        print("wer_beam_total is:", self.wer_beam_total/self.counter_writings)
+        print("cer_beam_total is:", self.cer_beam_total/self.counter_writings)

@@ -65,7 +65,7 @@ def main(config):
     )
 
     logs = inferencer.run_inference()
-
+    inferencer.show_statistics()
     for part in logs.keys():
         for key, value in logs[part].items():
             full_key = part + "_" + key
