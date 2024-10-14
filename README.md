@@ -21,7 +21,7 @@ To run your training should write following:
 python3 train.py HYDRA_CONFIG_ARGUMENTS
 ```
 
-My checkpoint path: https://disk.yandex.com/d/srKCqb83Em5kWw
+My checkpoint path: https://disk.yandex.com/d/0jURAOt2w45wNg
 To run inference (evaluate the model or save predictions) don't forget to change path to checkpoint:
 
 ```bash
